@@ -28,6 +28,10 @@ chantext=[]
 rooster=[]
 
 
+########
+## TODO: normalize inputs! 
+##
+
 # Server rooster dictionary: nick->timestamp
 serverRooster={}
 
