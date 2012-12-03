@@ -3,7 +3,7 @@ torirc
 
 Secure/anonymous IRC using TOR hidden services
 
-This is a simple client/server chat using TOR hidden services, implemented in a single python file.
+This is a simple client/server chat using TOR hidden services, implemented in a single python file. License is GNU-GPL
 
 Objectives are:
 	Anonymous/Encrypted chat resistant to:
