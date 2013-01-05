@@ -5,53 +5,113 @@ import curses,traceback
 from threading import Thread
 from optparse import OptionParser
 import time,os,subprocess
-import socket,socks,select,random
+import socket,socks,select,random,sys
 
 __author__="alfred"
-__date__ ="$Nov 18, 2012 4:17:49 PM$"
+__date__ ="$Jan 03, 2013 2:12 PM$"
 
 ### Config
 hidden_service_interface='127.0.0.1'
 hidden_service_port=11009
-hostnamefile='Tor/hidden_service/hostname'
+configdir='Torirc-config'
+hostnamefile='%s/hidden_service/hostname' % configdir
 
 tor_server='127.0.0.1'
-tor_server_socks_port=9050
+tor_server_socks_port=11109
 
 clientRandomWait=5 # Random wait before sending messages
-clientRandomNoise=10 # Random wait before sending noise to the server
-serverRandomWait=5 # Random wait before sending messages
+clientRandomNoise=10 # Random wait before sending the "noise message" to the server
+serverRandomWait=5 # Random wait before sending messages 
 
 buddywidth=20
 
+# lists for the gui
 chantext=[]
 rooster=[]
 
 
-########
-## TODO: normalize inputs! 
-##
+## Tor glue-logic files
 
-# Server rooster dictionary: nick->timestamp
-serverRooster={}
+#tor.sh
+torsh="""#!/bin/sh
 
-## List of message queues to send to clients
-servermsgs=[]
+trap 'kill -15 `cat tor.pid`' 15
 
-## Server mode
-Server=False
+export PATH=$PATH:/usr/sbin
+tor -f torrc.txt --PidFile tor.pid &
+wait
+"""
+#torrc.txt
+torrc="""## Socks port
+SocksPort %d
 
-### Buddy class
+## INCOMING connections for the hidden service arrive at 11009 
+HiddenServiceDir hidden_service
+HiddenServicePort %d %s:%d
+
+## where should tor store it's cache files
+DataDirectory tor_data
+
+## some tuning
+AvoidDiskWrites 1
+LongLivedPorts %d
+FetchDirInfoEarly 1
+CircuitBuildTimeout 30
+NumEntryGuards 6
+""" % (tor_server_socks_port,hidden_service_port,hidden_service_interface,hidden_service_port,hidden_service_port)
+
+# Initialize stand-alone TOR process
+def initTorDirs():
+    	log ("(1) initializing directories")
+	#Create dir
+	TorDir=os.path.join(os.getcwd(),configdir)
+	if not os.path.isdir(TorDir):
+		os.mkdir(TorDir)
+	#Create torrc.txt
+	torrcDir=os.path.join(TorDir,"torrc.txt")
+	if not os.path.exists(torrcDir):
+		a=open(torrcDir,"wb")
+		a.write(torrc)
+		a.close()
+	torshDir=os.path.join(TorDir,"tor.sh")
+	if not os.path.exists(torshDir):
+		#Create tor.sh
+		a=open(torshDir,"wb")
+		a.write(torsh)
+		a.close()
+                os.system("chmod +x %s" % torshDir)
+	
+## Log Mode
+STDoutLog=False
+
+## Return sanitized version of input string
+def sanitize(string):
+	out=""
+	for c in string:
+		if (ord(c)>=0x20) and (ord(c)<0x80):
+			out+=c
+	return out
+
+### Server class
 # Contains the server socket listener/writer
 
-class Buddy():
-	def __str__(self):
-		return "%s" % (self.nick)
-	def __init__(self,nick):
-		self.nick=nick
-		
+class Server():
+	# Server rooster dictionary: nick->timestamp
+	serverRooster={}
+	## List of message queues to send to clients
+	servermsgs=[]
+	## Eliminate all nicks more than a day old
+	def serverRoosterCleanThread(self):
+		while True:
+			time.sleep(10)
+			current=time.time()
+			for b in self.serverRooster:
+				if current-self.serverRooster[b]>60*60*24: # More than a day old
+					self.serverRooster.pop(b) #eliminate nick
+			
+
+	## Thread attending a single client
 	def serverThread(self,conn,addr,msg):
-		global servermsgs
 		log("(ServerThread): Received connection")
 		conn.setblocking(0)
 		randomwait=random.randint(1,serverRandomWait)
@@ -60,7 +120,7 @@ class Buddy():
 				time.sleep(1)
 				ready = select.select([conn], [], [], 1.0)
 				if ready[0]:
-					data=conn.recv(256)
+					data=sanitize(conn.recv(256))
 					if len(data)==0: continue
 					message="%s: %s" % (self.nick,data)
 					# Received PING, send PONG
@@ -70,26 +130,25 @@ class Buddy():
 						continue
 					# Change nick. Note that we do not add to rooster before this operation
 					if data.startswith("/nick "): 
-						## TODO: Sanitize nick
 						newnick=data[6:].strip()
 						log("Nick change: %s->%s" % (self.nick,newnick))
 						self.nick=newnick
-						serverRooster[newnick]=time.time() # save/refresh timestamp
+						self.serverRooster[newnick]=time.time() # save/refresh timestamp
 						message="Nick changed to %s" % newnick
 						msg.append(message)
 						continue
 					# Return rooster
 					if data.startswith("/rooster"):
 						message = "--rooster"
-						totalbuddies=len(servermsgs)
-						for r in serverRooster:
+						totalbuddies=len(self.servermsgs)
+						for r in self.serverRooster:
 							message+=" %s" % r
 							totalbuddies-=1
 						message+=" --anonymous:%d" % totalbuddies
 						msg.append(message)
 						continue
 					# Send 'message' to all queues
-					for m in servermsgs:
+					for m in self.servermsgs:
 						m.append(message)
 				# We need to send a message
 				if len(msg)>0:
@@ -99,16 +158,48 @@ class Buddy():
 						conn.sendall(m)
 						randomwait=random.randint(1,serverRandomWait)
 				# Random wait before sending noise to the client
-				if random.randint(0,clientRandomNoise*10)==0: 
+				if random.randint(0,clientRandomNoise)==0: 
 					ping="/PING "
 					for i in range(120):
 						ping+="%02X" % random.randint(0,255)
 					msg.append(ping)
 			except:
-				servermsgs.remove(msg)
+				self.servermsgs.remove(msg)
 				conn.close()
-				print "exiting: msgs %d" % len(servermsgs)
+				print "exiting: msgs %d" % len(self.servermsgs)
 				raise
+	def serverMain(self):
+		global STDOutLog
+		global TORclientFunctionality
+		STDOutLog=True
+		initTor()
+		# Create server rooster cleanup thread
+		t = Thread(target=self.serverRoosterCleanThread, args=())
+		t.daemon = True
+		t.start()
+		while(TORclientFunctionality==0):
+			time.sleep(1)
+		log("(Main Server Thread) Tor looks active, listening on %s:%d" % (hostname,hidden_service_port))
+		s=socks.socksocket(socket.AF_INET,socket.SOCK_STREAM)
+		s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1) 
+		s.bind((hidden_service_interface,hidden_service_port))
+		s.listen(5)
+		while True:
+			try:
+				conn,addr = s.accept()
+				cmsg=[]
+				cmsg.append("Welcome to irc-tor, this is Server")
+				self.servermsgs.append(cmsg)
+				self.nick="anon_%d" % random.randint(0,10000)
+				t = Thread(target=self.serverThread, args=(conn,addr,cmsg))
+				t.daemon = True
+				t.start()
+			except KeyboardInterrupt:
+				log("(Main Server Thread): Exiting")
+			        exit(0)
+			except:
+				pass
+
 
 		
 
@@ -118,15 +209,20 @@ def chat_help():
 ### commands
 commands =[]
 
-def chat_help(args): #
+def chat_help(args): # Help
 	chantext.append("\ttor-irc, %s %s" % (__author__,__date__))
 	chantext.append("\tAvailable commands:")
 	for c in commands:
 		chantext.append("\t\t/%s: %s" % (c[0],c[2]))
-commands.append(("help",chat_help,"AAAA"))
+	return ""
+commands.append(("help",chat_help,"Local help"))
 
 
-def chat_quit(args): #
+def chat_server_help(args): # Server help
+	return "/serverhelp"
+commands.append(("serverhelp",chat_server_help,"Request sever commands help"))
+
+def chat_quit(args): # Quit
 	exit(0)
 commands.append(("quit",chat_quit,"Exit the application"))
 
@@ -175,12 +271,13 @@ def processLine(command):
 		for t in commands:
 			if comm[0].startswith(t[0]):
 				func=t[1]
-				func(comm)
-				return ""
+				return func(comm)
 	return command
 
+## Log function
+## Logs to STDOut or to the chantext channel list
 def log(text):
-	if (Server):
+	if (STDOutLog):
 		print text
 	else:
 		maxlen=width-buddywidth-1
@@ -194,7 +291,7 @@ def log(text):
 		stdscr.refresh()
 
 
-##TOR
+## Variable signalling TOR client functionality available
 TORclientFunctionality=0
 
 # Listen to TOR STDOut and print to LOG
@@ -212,22 +309,14 @@ def torStdoutThread(torproc):
 			hostname=a.read().strip()
 			a.close()
 			TORclientFunctionality=1
-
 		time.sleep(0.2)
 
-# Monitor the TOR Process and restart if needed
-#
-def torMonitorThread(stdscr):
-	global count
-	count=0
-	time.sleep(0.1)
-	startPortableTor()
-	while(True):
-		time.sleep(2)
-		count+=1
-		if tor_proc.poll() != None:
-			log("(1) Tor stopped running, restarting")
-			startPortableTor()
+## Connects to TOR via Socks
+def openTORSocket():
+	s=socks.socksocket(socket.AF_INET,socket.SOCK_STREAM)
+	s.setproxy(socks.PROXY_TYPE_SOCKS5,tor_server,tor_server_socks_port)
+	s.settimeout(100)
+	return s
 
 # Client connection thread
 def clientConnectionThread(stdscr,ServerOnionURL,msgs):
@@ -235,14 +324,13 @@ def clientConnectionThread(stdscr,ServerOnionURL,msgs):
 	global rooster
 	while(TORclientFunctionality==0):
 		time.sleep(1)
-	log("clientConnection: TOR looks alive")
+	log("clientConnection: TOR looks alive")		
 	while(True):
 		try: 
 			log("Trying to connect to %s:%d" % (ServerOnionURL,hidden_service_port))
-			s=socks.socksocket(socket.AF_INET,socket.SOCK_STREAM)
-			s.setproxy(socks.PROXY_TYPE_SOCKS4,tor_server,tor_server_socks_port)
-			s.settimeout(100)
+			s = openTORSocket()
 			s.connect((ServerOnionURL,hidden_service_port))
+			log("%s %d" % (ServerOnionURL,hidden_service_port))
 			s.setblocking(0)
 			log("clientConnection: Connected to %s" % ServerOnionURL)
 			log("clientConnection: Autorequesting rooster...")
@@ -250,14 +338,18 @@ def clientConnectionThread(stdscr,ServerOnionURL,msgs):
 			randomwait=random.randint(1,clientRandomWait)
 		except:
 			log("clientConnection: Can't connect!")
-			time.sleep(1)
+			log(traceback.format_exc())
+			initTor()
+			while(TORclientFunctionality==0):
+				time.sleep(1)
+			continue
 		try:
 			while(True):
 				time.sleep(1)
 				ready = select.select([s], [], [], 1.0)
 				# received data from server
 				if ready[0]:
-					data=s.recv(256)
+					data=sanitize(s.recv(256))
 					# received pong (ignore)
 					if data.find("/PING ")>-1:
 						continue 
@@ -288,26 +380,26 @@ def clientConnectionThread(stdscr,ServerOnionURL,msgs):
 
 
 
-def startPortableTor():
-    log ("(1) entering function startPortableTor()")
+def initTor():
     global tor_in, tor_out
     global TOR_CONFIG
     global tor_pid
     global tor_proc
+    log ("(1) entering function initTor()")
+    initTorDirs()
     old_dir = os.getcwd()
     log("(1) current working directory is %s" % os.getcwd())
     try:
         log("(1) changing working directory")
-        os.chdir("Tor")
+        os.chdir(configdir)
         log("(1) current working directory is %s" % os.getcwd())
 
         # now start tor with the supplied config file
         log("(1) trying to start Tor")
 
         if os.path.exists("tor.sh"):
-                #let our shell script start a tor instance
-                os.system("chmod +x tor.sh")
 		#os.system("killall -9 tor") # a little violent
+                #let our shell script start a tor instance
                 tor_proc = subprocess.Popen("./tor.sh".split(),stdout=subprocess.PIPE)
                 tor_pid = tor_proc.pid
                 log("(1) tor pid is %i" % tor_pid)
@@ -327,10 +419,8 @@ def startPortableTor():
                 try:
                     log("(1) trying to read hostname file (try %i of 20)" % (cnt + 1))
                     f = open(os.path.join("hidden_service", "hostname"), "r")
-                    hostname = f.read().rstrip()[:-6]
+                    hostname = f.read().strip()
                     log("(1) found hostname: %s" % hostname)
-                    log("(1) writing own_hostname to torchat.ini")
-                    #config.set("client", "own_hostname", hostname)
                     found = True
                     f.close()
                     break
@@ -352,19 +442,18 @@ def startPortableTor():
 		t.daemon = True
 		t.start()
 
-                #startPortableTorTimer()
         else:
             log("(1) no own Tor instance. Settings in [tor] will be used")
 
     except:
         log("(1) an error occured while starting tor, see traceback:")
         log(traceback.format_exc())           # Print the exception
-        #tb(1)
 
     log("(1) changing working directory back to %s" % old_dir)
     os.chdir(old_dir)
     log("(1) current working directory is %s" % os.getcwd())
 
+## Client main procedure
 def clientMain(stdscr,ServerOnionURL):
 	global cmdline
 	global inspoint
@@ -372,12 +461,6 @@ def clientMain(stdscr,ServerOnionURL):
 	changeSize(stdscr)
 	redraw(stdscr)
 	
-	"""
-	t = Thread(target=torMonitorThread, args=(stdscr,))
-	t.daemon = True
-	t.start()
-	"""
-
 	global TORclientFunctionality
 	global hostname
 	a=open(hostnamefile,"rb")
@@ -441,58 +524,12 @@ def clientMain(stdscr,ServerOnionURL):
 			inspoint+=1
 		redraw(stdscr)
 
-## Eliminate all nicks more than a day old
-def serverRoosterCleanThread():
-	while True:
-		time.sleep(10)
-		current=time.time()
-		for b in serverRooster:
-			if current-serverRooster[b]>60*60*24: # More than a day old
-				serverRooster.pop(b) #eliminate nick
-			
-def Server():
-	global Server
-	global TORclientFunctionality
-	global servermsgs
-	Server=True
-	startPortableTor()
-	while(TORclientFunctionality==0):
-		time.sleep(1)
-	
-	# Create server rooster cleanup thread
-	t = Thread(target=serverRoosterCleanThread, args=())
-	t.daemon = True
-	t.start()
-
-	time.sleep(1)
-	log("(Main Server Thread) Tor looks active, listening on %s:%d" % (hostname,hidden_service_port))
-	s=socks.socksocket(socket.AF_INET,socket.SOCK_STREAM)
-	s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1) 
-	s.bind((hidden_service_interface,hidden_service_port))
-	s.listen(5)
-	while True:
-		try:
-			conn,addr = s.accept()
-			cmsg=[]
-			cmsg.append("Welcome to irc-tor, this is Server")
-			servermsgs.append(cmsg)
-			tempnick="anon_%d" % addr[1]
-			buddy=Buddy(tempnick)
-			t = Thread(target=buddy.serverThread, args=(conn,addr,cmsg))
-			t.daemon = True
-			t.start()
-		except KeyboardInterrupt:
-			log("(Main Server Thread): Exiting")
-		        exit(0)
-		except:
-			pass
-
-
-
+# Client
+# Init/deinit curses 
 def Client(ServerOnionURL):
   global stdscr
-  global Server
-  Server=False
+  global STDOutLog 
+  STDOutLog=False
   try:
       # Initialize curses
       stdscr=curses.initscr()
@@ -513,17 +550,17 @@ def Client(ServerOnionURL):
       curses.echo()
       curses.nocbreak()
       curses.endwin()
-      traceback.print_exc()           # Print the exception
 	
 
 # Main proc:
-# Init/deinit curses 
+# Parse options, invoke Server or Client
 if __name__=='__main__':
   parser = OptionParser()
   parser.add_option("-c", "--connect", action="store", type="string", dest="connect", help="Acts as client, connect to server")
   parser.add_option("-s", "--server", action="store_true", dest="Server", help="Acts as server")
   (options, args) = parser.parse_args()
   if options.Server:
-  	Server()
+  	s=Server()
+	s.serverMain()
   else:
    	Client(options.connect)
