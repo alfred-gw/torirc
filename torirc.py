@@ -92,6 +92,19 @@ def sanitize(string):
 			out+=c
 	return out
 
+## Load hidden hostname from Tor config directory
+def loadhostname():
+	global hostname
+	a=open(hostnamefile,"rb")
+	hostname=a.read().strip()
+	a.close()
+	return hostname
+
+## detects TOR
+def detectTOR():
+	return False
+
+
 ### Server class
 # Contains the server socket listener/writer
 
@@ -172,18 +185,26 @@ class Server():
 		global STDOutLog
 		global TORclientFunctionality
 		STDOutLog=True
-		initTor()
+		log("(Main Server Thread) Trying to connect to existing tor...")
+		if detectTOR():
+			s=socks.socksocket(socket.AF_INET,socket.SOCK_STREAM)
+			s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1) 
+			s.bind((hidden_service_interface,hidden_service_port))
+			loadhostname()
+			TORclientFunctionality=1
+		else:
+			initTor()
+			while(TORclientFunctionality==0):
+				time.sleep(1)
+			s=socks.socksocket(socket.AF_INET,socket.SOCK_STREAM)
+			s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1) 
+			s.bind((hidden_service_interface,hidden_service_port))
+		log("(Main Server Thread) Tor looks active, listening on %s:%d" % (hostname,hidden_service_port))
+		s.listen(5)
 		# Create server rooster cleanup thread
 		t = Thread(target=self.serverRoosterCleanThread, args=())
 		t.daemon = True
 		t.start()
-		while(TORclientFunctionality==0):
-			time.sleep(1)
-		log("(Main Server Thread) Tor looks active, listening on %s:%d" % (hostname,hidden_service_port))
-		s=socks.socksocket(socket.AF_INET,socket.SOCK_STREAM)
-		s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1) 
-		s.bind((hidden_service_interface,hidden_service_port))
-		s.listen(5)
 		while True:
 			try:
 				conn,addr = s.accept()
@@ -304,19 +325,9 @@ def torStdoutThread(torproc):
 		if line != '':
 			log("(TOR):%s" % line)
 		if line.find("Looks like client functionality is working")>-1:
-			# Load hostname
-			a=open(hostnamefile,"rb")
-			hostname=a.read().strip()
-			a.close()
+			loadhostname()
 			TORclientFunctionality=1
 		time.sleep(0.2)
-
-## Connects to TOR via Socks
-def openTORSocket():
-	s=socks.socksocket(socket.AF_INET,socket.SOCK_STREAM)
-	s.setproxy(socks.PROXY_TYPE_SOCKS5,tor_server,tor_server_socks_port)
-	s.settimeout(100)
-	return s
 
 # Client connection thread
 def clientConnectionThread(stdscr,ServerOnionURL,msgs):
@@ -328,18 +339,20 @@ def clientConnectionThread(stdscr,ServerOnionURL,msgs):
 	while(True):
 		try: 
 			log("Trying to connect to %s:%d" % (ServerOnionURL,hidden_service_port))
-			s = openTORSocket()
+			## Connects to TOR via Socks
+			s=socks.socksocket(socket.AF_INET,socket.SOCK_STREAM)
+			s.setproxy(socks.PROXY_TYPE_SOCKS5,tor_server,tor_server_socks_port)
+			s.settimeout(100)
 			s.connect((ServerOnionURL,hidden_service_port))
-			log("%s %d" % (ServerOnionURL,hidden_service_port))
 			s.setblocking(0)
 			log("clientConnection: Connected to %s" % ServerOnionURL)
 			log("clientConnection: Autorequesting rooster...")
 			msgs.append("/rooster")
 			randomwait=random.randint(1,clientRandomWait)
 		except:
-			log("clientConnection: Can't connect!")
-			log(traceback.format_exc())
-			initTor()
+			log("clientConnection: Can't connect! retrying...")
+			#log(traceback.format_exc())
+			#initTor()
 			while(TORclientFunctionality==0):
 				time.sleep(1)
 			continue
@@ -398,7 +411,6 @@ def initTor():
         log("(1) trying to start Tor")
 
         if os.path.exists("tor.sh"):
-		#os.system("killall -9 tor") # a little violent
                 #let our shell script start a tor instance
                 tor_proc = subprocess.Popen("./tor.sh".split(),stdout=subprocess.PIPE)
                 tor_pid = tor_proc.pid
@@ -463,9 +475,7 @@ def clientMain(stdscr,ServerOnionURL):
 	
 	global TORclientFunctionality
 	global hostname
-	a=open(hostnamefile,"rb")
-	hostname=a.read().strip()
-	a.close()
+	loadhostname()
 	TORclientFunctionality=1
 
 	## Message queue to send to server
@@ -558,6 +568,10 @@ if __name__=='__main__':
   parser = OptionParser()
   parser.add_option("-c", "--connect", action="store", type="string", dest="connect", help="Acts as client, connect to server")
   parser.add_option("-s", "--server", action="store_true", dest="Server", help="Acts as server")
+  	# no arguments->bail
+  if len(sys.argv)==1:
+  	parser.print_help()
+	exit(0)
   (options, args) = parser.parse_args()
   if options.Server:
   	s=Server()
