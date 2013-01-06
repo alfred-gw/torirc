@@ -42,16 +42,16 @@ Objectives
 ----------
 
 Anonymous/Encrypted chat resistant to:
-		+  Network analysis techniques
-		+  Exploits
-		+  Crypto attacks
-		+ Trust minimization
+ *  Network analysis techniques
+ *  Exploits
+ *  Crypto attacks
+ * Trust minimization
 
 To reach those objectives the design of torirc follows:
-	+  Simplicity: Small means less bugs and easier to audit
-	+  Interpreted language: Avoid most memory corruption bugs
-	+  Minimize library use: Again, less code susceptible to bugs
-	+  Entropy maximization: When possible, random delays and useless data is transmitted.
+  * Simplicity: Small means less bugs and easier to audit
+  * Interpreted language: Avoid most memory corruption bugs
+  * Minimize library use: Again, less code susceptible to bugs
+  * Entropy maximization: When possible, random delays and useless data is transmitted.
 
 
 Discussion of choices
