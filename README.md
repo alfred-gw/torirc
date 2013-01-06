@@ -57,9 +57,9 @@ To reach those objectives the design of torirc follows:
 Discussion of choices
 ---------------------
 
- *  Python: I seleted python because it's what I know, and the interpreter is relatively small. Second choice would have been Java, but the JRE is too big and cumbersome. Also Python usually comes installed in most Linux distros.
+ *  Python: I selected python because it's what I know, and the interpreter is relatively small. Second choice would have been Java, but the JRE is too big and cumbersome. Also Python usually comes installed in most Linux distros.
 
- *  TOR: TOR is a big ugly chunk of C code that I do not trust entirely, but at this time is the only software that provides the functionality that I need, that is, hidden services and onion routing. Also, the current version of torirc doesn't have his own cryptography routines and uses TOR for it, but this may change in the future.
+ *  TOR: big ugly chunk of C code that I do not trust entirely, but at this time is the only software that provides the functionality that I need, that is, hidden services and onion routing. Also, the current version of torirc doesn't have his own cryptography routines and uses TOR for it, but this may change in the future.
 
 Alternatives
 ------------
