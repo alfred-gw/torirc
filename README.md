@@ -82,6 +82,7 @@ This still is experimental software so no strong network-analysis-proof must be 
  * Thanks to TOR, nobody, the server or the clients, known the IP address of nobody else.
  * However, the server knows when a client is connected.
  * The client periodically sends random data at random intervals.
+ * Every message is padded to minimum_message_len (currently 256 bytes)
  * The server doesn't accurately report the number of clients in the chatroom, it only erases a nick approximately a day after it disconnects (this delay is also random)
 
 Network analysis is a hard problem and there are hundreds of side-channels that can be used to determine if a user is connected or not. This information can be the difference between life and death for some people, so it's a useful problem to tackle IMHO.
