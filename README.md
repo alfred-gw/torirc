@@ -7,30 +7,30 @@ This is a simple client/server chat using TOR hidden services, implemented in a 
 
 Usage
 -----
-torirc.py [options]
+	torirc.py [options]
 
-Options:
-  -h, --help            show this help message and exit
-  -c CONNECT, --connect=CONNECT
-                        Acts as client, connect to server
-  -s, --server          Acts as server
+	Options:
+	  -h, --help            show this help message and exit
+	  -c CONNECT, --connect=CONNECT
+	                        Acts as client, connect to server
+	  -s, --server          Acts as server
 
 Example use:
 ------------
 
 In the Server:
 
-~$ ./torirc.py -s
-(Main Server Thread) Trying to connect to existing tor...
-(Main Server Thread) Tor looks active, listening on k52whdwcd2zxjtcq.onion
+	~$ ./torirc.py -s
+	(Main Server Thread) Trying to connect to existing tor...
+	(Main Server Thread) Tor looks active, listening on k52whdwcd2zxjtcq.onion
 
 
 In the Client:
 
-~$./torirc.py  -c k52whdwcd2zxjtcq.onion
-clientConnection: TOR looks alive
-Trying to connect to k52whdwcd2zxjtcq.onion:11009
-clientConnection: Connected to k52whdwcd2zxjtcq.onion
+	~$./torirc.py  -c k52whdwcd2zxjtcq.onion
+	clientConnection: TOR looks alive
+	Trying to connect to k52whdwcd2zxjtcq.onion:11009
+	clientConnection: Connected to k52whdwcd2zxjtcq.onion
 
 
 You will be assigned a randomly generated nick. You need to set your nick with '/nick' and you are good to go. If you want multiple chatrooms, start multiple servers, each one will auto-generate their own hidden-service url.
