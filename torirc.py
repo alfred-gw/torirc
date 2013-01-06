@@ -23,7 +23,14 @@ import curses,traceback
 from threading import Thread
 from optparse import OptionParser
 import time,os,subprocess
-import socket,socks,select,random,sys
+import socket,select,random,sys
+
+try:
+	import socks
+except:
+	print "Can't load socksiphy module."
+	print "Try installing python-socksipy in debian-like distros"
+	exit(0)
 
 __author__="alfred"
 __date__ ="$Jan 06, 2013$"
@@ -264,7 +271,7 @@ class Server():
 			for b in self.serverRoster:
 				if current-self.serverRoster[b]>waittime: # Idle for more than the time limit
 					self.serverRoster.pop(b) #eliminate nick
-					waittime = random.randint(10*60*24,100*60*24)
+					waittime = random.randint(60*60*10,60*60*36)
 			
 	## Thread attending a single client
 	def serverThread(self,conn,addr,msg,nick):
