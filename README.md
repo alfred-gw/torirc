@@ -22,7 +22,8 @@ This is a console-only application.
 You need a recent version of TOR configured and in your path. Also the time of the computer needs to be correct or else TOR won't connect.
 
 In the Server:
-	~$ ./torirc.py --server=#TESTSRV
+
+	~$ ./torirc.py --server=#EXAMPLESRV
 	(Main Server Thread) Trying to connect to existing tor...
 	(Main Server Thread) Tor looks active, listening on k52whdwcd2zxjtcq.onion
 
