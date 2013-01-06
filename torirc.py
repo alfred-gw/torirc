@@ -1,6 +1,24 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+# Copyright (C) 2012-2013, Alfredo Ortega <alfred@groundworkstech.com>
+# All rights reserved.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA
+#
+
 import curses,traceback
 from threading import Thread
 from optparse import OptionParser
@@ -8,29 +26,36 @@ import time,os,subprocess
 import socket,socks,select,random,sys
 
 __author__="alfred"
-__date__ ="$Jan 03, 2013 2:12 PM$"
+__date__ ="$Jan 06, 2013$"
 
-### Config
-hidden_service_interface='127.0.0.1'
-hidden_service_port=11009
+## ---------- Start of user-configurable variables ----------------
+
+# Directories
 configdir='Torirc-config'
 hostnamefile='%s/hidden_service/hostname' % configdir
 
+# Network-related variables
+hidden_service_interface='127.0.0.1'
+hidden_service_port=11009
 tor_server='127.0.0.1'
 tor_server_socks_port=11109
+
+## Time "noise". Increase this value in dire situations
 
 clientRandomWait=5 # Random wait before sending messages
 clientRandomNoise=10 # Random wait before sending the "noise message" to the server
 serverRandomWait=5 # Random wait before sending messages 
 
+## Gui
 buddywidth=20
+
+## ---------- End of user-configurable variables -----------------
 
 # lists for the gui
 chantext=[]
-rooster=[]
+roster=[]
 
-
-## Tor glue-logic files
+## Tor glue files
 
 #tor.sh
 torsh="""#!/bin/sh
@@ -41,6 +66,7 @@ export PATH=$PATH:/usr/sbin
 tor -f torrc.txt --PidFile tor.pid &
 wait
 """
+
 #torrc.txt
 torrc="""## Socks port
 SocksPort %d
@@ -60,7 +86,13 @@ CircuitBuildTimeout 30
 NumEntryGuards 6
 """ % (tor_server_socks_port,hidden_service_port,hidden_service_interface,hidden_service_port,hidden_service_port)
 
-# Initialize stand-alone TOR process
+## Log Mode (Server logs to stdout, client do not)
+STDoutLog=False
+
+## Variable signalling TOR client functionality available
+TORclientFunctionality=0
+
+# Initialize TOR config directory
 def initTorDirs():
     	log ("(1) initializing directories")
 	#Create dir
@@ -81,8 +113,6 @@ def initTorDirs():
 		a.close()
                 os.system("chmod +x %s" % torshDir)
 	
-## Log Mode
-STDoutLog=False
 
 ## Return sanitized version of input string
 def sanitize(string):
@@ -92,6 +122,7 @@ def sanitize(string):
 			out+=c
 	return out
 
+
 ## Load hidden hostname from Tor config directory
 def loadhostname():
 	global hostname
@@ -100,299 +131,18 @@ def loadhostname():
 	a.close()
 	return hostname
 
-## detects TOR
+
+## detects TOR by binding to the socks port
 def detectTOR():
-	return False
+	try:
+		s=socks.socksocket(socket.AF_INET,socket.SOCK_STREAM)
+		s.settimeout(1)
+		s.connect((tor_server,tor_server_socks_port))
+		s.close()
+		return True
+	except:	return False
 
-
-### Server class
-# Contains the server socket listener/writer
-
-class Server():
-	# Server rooster dictionary: nick->timestamp
-	serverRooster={}
-	## List of message queues to send to clients
-	servermsgs=[]
-	## Eliminate all nicks more than a day old
-	def serverRoosterCleanThread(self):
-		while True:
-			time.sleep(10)
-			current=time.time()
-			for b in self.serverRooster:
-				if current-self.serverRooster[b]>60*60*24: # More than a day old
-					self.serverRooster.pop(b) #eliminate nick
-			
-
-	## Thread attending a single client
-	def serverThread(self,conn,addr,msg):
-		log("(ServerThread): Received connection")
-		conn.setblocking(0)
-		randomwait=random.randint(1,serverRandomWait)
-		while (True):
-			try:
-				time.sleep(1)
-				ready = select.select([conn], [], [], 1.0)
-				if ready[0]:
-					data=sanitize(conn.recv(256))
-					if len(data)==0: continue
-					message="%s: %s" % (self.nick,data)
-					# Received PING, send PONG
-					if data.startswith("/PING"):
-						message=""
-						msg.append(data)
-						continue
-					# Change nick. Note that we do not add to rooster before this operation
-					if data.startswith("/nick "): 
-						newnick=data[6:].strip()
-						log("Nick change: %s->%s" % (self.nick,newnick))
-						self.nick=newnick
-						self.serverRooster[newnick]=time.time() # save/refresh timestamp
-						message="Nick changed to %s" % newnick
-						msg.append(message)
-						continue
-					# Return rooster
-					if data.startswith("/rooster"):
-						message = "--rooster"
-						totalbuddies=len(self.servermsgs)
-						for r in self.serverRooster:
-							message+=" %s" % r
-							totalbuddies-=1
-						message+=" --anonymous:%d" % totalbuddies
-						msg.append(message)
-						continue
-					# Send 'message' to all queues
-					for m in self.servermsgs:
-						m.append(message)
-				# We need to send a message
-				if len(msg)>0:
-					randomwait-=1 # Wait some random time to add noise
-					if randomwait==0:
-						m=msg.pop(0)
-						conn.sendall(m)
-						randomwait=random.randint(1,serverRandomWait)
-				# Random wait before sending noise to the client
-				if random.randint(0,clientRandomNoise)==0: 
-					ping="/PING "
-					for i in range(120):
-						ping+="%02X" % random.randint(0,255)
-					msg.append(ping)
-			except:
-				self.servermsgs.remove(msg)
-				conn.close()
-				print "exiting: msgs %d" % len(self.servermsgs)
-				raise
-	def serverMain(self):
-		global STDOutLog
-		global TORclientFunctionality
-		STDOutLog=True
-		log("(Main Server Thread) Trying to connect to existing tor...")
-		if detectTOR():
-			s=socks.socksocket(socket.AF_INET,socket.SOCK_STREAM)
-			s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1) 
-			s.bind((hidden_service_interface,hidden_service_port))
-			loadhostname()
-			TORclientFunctionality=1
-		else:
-			initTor()
-			while(TORclientFunctionality==0):
-				time.sleep(1)
-			s=socks.socksocket(socket.AF_INET,socket.SOCK_STREAM)
-			s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1) 
-			s.bind((hidden_service_interface,hidden_service_port))
-		log("(Main Server Thread) Tor looks active, listening on %s:%d" % (hostname,hidden_service_port))
-		s.listen(5)
-		# Create server rooster cleanup thread
-		t = Thread(target=self.serverRoosterCleanThread, args=())
-		t.daemon = True
-		t.start()
-		while True:
-			try:
-				conn,addr = s.accept()
-				cmsg=[]
-				cmsg.append("Welcome to irc-tor, this is Server")
-				self.servermsgs.append(cmsg)
-				self.nick="anon_%d" % random.randint(0,10000)
-				t = Thread(target=self.serverThread, args=(conn,addr,cmsg))
-				t.daemon = True
-				t.start()
-			except KeyboardInterrupt:
-				log("(Main Server Thread): Exiting")
-			        exit(0)
-			except:
-				pass
-
-
-		
-
-def chat_help():
-	pass
-
-### commands
-commands =[]
-
-def chat_help(args): # Help
-	chantext.append("\ttor-irc, %s %s" % (__author__,__date__))
-	chantext.append("\tAvailable commands:")
-	for c in commands:
-		chantext.append("\t\t/%s: %s" % (c[0],c[2]))
-	return ""
-commands.append(("help",chat_help,"Local help"))
-
-
-def chat_server_help(args): # Server help
-	return "/serverhelp"
-commands.append(("serverhelp",chat_server_help,"Request sever commands help"))
-
-def chat_quit(args): # Quit
-	exit(0)
-commands.append(("quit",chat_quit,"Exit the application"))
-
-
-## GUI
-def changeSize(stdscr):
-	global width,height
-	size = stdscr.getmaxyx()
-	width=size[1]
-	height=size[0]
-
-count=0
-cmdline=""
-inspoint=0
-pagepoint=0
-def redraw(stdscr):
-	global textpad
-	global rooster
-	stdscr.clear()
-	# draw Text
-	line=height-3
-	for i in reversed(range(len(chantext)-pagepoint)):
-		try:
-			stdscr.addstr(line,0,chantext[i],0)
-			if line==0: break
-			else: line-=1
-		except:
-			pass
-	# draw rooster
-	for i in range(len(rooster)):
-		buddy=rooster[i]
-		stdscr.addstr(i,width-buddywidth+1,str(buddy),0)
-	# draw lines
-	stdscr.hline(height-2,0,curses.ACS_HLINE,width)
-	stdscr.vline(0,width-buddywidth,curses.ACS_VLINE,height-2)
-	# prompt
-	prompt="~ "
-	stdscr.addstr(height-1,0,"%s%s" % (prompt,cmdline),0)
-	stdscr.move(height-1,len(prompt)+inspoint)
-
-# Process command line
-# Returns string to send to server
-def processLine(command):
-	if command.startswith("/"):
-		comm=command[1:].split(' ')
-		for t in commands:
-			if comm[0].startswith(t[0]):
-				func=t[1]
-				return func(comm)
-	return command
-
-## Log function
-## Logs to STDOut or to the chantext channel list
-def log(text):
-	if (STDOutLog):
-		print text
-	else:
-		maxlen=width-buddywidth-1
-		while (True):
-			if (len(text[:maxlen])>0):
-				chantext.append(text[:maxlen])
-			text=text[maxlen:]
-			if text=='':
-				break
-		redraw(stdscr)
-		stdscr.refresh()
-
-
-## Variable signalling TOR client functionality available
-TORclientFunctionality=0
-
-# Listen to TOR STDOut and print to LOG
-# Additionaly look for client functionality working
-def torStdoutThread(torproc):
-	global TORclientFunctionality
-	global hostname
-	while(True):
-		line=torproc.stdout.readline()
-		if line != '':
-			log("(TOR):%s" % line)
-		if line.find("Looks like client functionality is working")>-1:
-			loadhostname()
-			TORclientFunctionality=1
-		time.sleep(0.2)
-
-# Client connection thread
-def clientConnectionThread(stdscr,ServerOnionURL,msgs):
-	global TORclientFunctionality
-	global rooster
-	while(TORclientFunctionality==0):
-		time.sleep(1)
-	log("clientConnection: TOR looks alive")		
-	while(True):
-		try: 
-			log("Trying to connect to %s:%d" % (ServerOnionURL,hidden_service_port))
-			## Connects to TOR via Socks
-			s=socks.socksocket(socket.AF_INET,socket.SOCK_STREAM)
-			s.setproxy(socks.PROXY_TYPE_SOCKS5,tor_server,tor_server_socks_port)
-			s.settimeout(100)
-			s.connect((ServerOnionURL,hidden_service_port))
-			s.setblocking(0)
-			log("clientConnection: Connected to %s" % ServerOnionURL)
-			log("clientConnection: Autorequesting rooster...")
-			msgs.append("/rooster")
-			randomwait=random.randint(1,clientRandomWait)
-		except:
-			log("clientConnection: Can't connect! retrying...")
-			#log(traceback.format_exc())
-			#initTor()
-			while(TORclientFunctionality==0):
-				time.sleep(1)
-			continue
-		try:
-			while(True):
-				time.sleep(1)
-				ready = select.select([s], [], [], 1.0)
-				# received data from server
-				if ready[0]:
-					data=sanitize(s.recv(256))
-					# received pong (ignore)
-					if data.find("/PING ")>-1:
-						continue 
-					# received rooster list
-					if data.startswith("--rooster"):
-						rooster=[]
-						for i in data.split(' '):
-							rooster.append(i)
-					# Write received data to channel
-					log(data)
-				# We need to send a message
-				if len(msgs)>0:  
-					randomwait-=1 # Wait some random time to add noise
-					if randomwait==0:
-						m = msgs.pop(0)
-						s.sendall(m)
-						randomwait=random.randint(1,clientRandomWait)
-				# send noise in form of PINGs
-				if random.randint(0,clientRandomNoise)==0:
-					ping="/PING "
-					for i in range(120):
-						ping+="%02X" % random.randint(0,255)
-					#log("Sending %s" % ping)
-					msgs.append(ping)
-		except:
-			s.close()
-			pass
-
-
-
+## Starts portable TOR process, torchat-style
 def initTor():
     global tor_in, tor_out
     global TOR_CONFIG
@@ -465,6 +215,306 @@ def initTor():
     os.chdir(old_dir)
     log("(1) current working directory is %s" % os.getcwd())
 
+## Log function
+## Logs to STDOut or to the chantext channel list
+def log(text):
+	if (STDOutLog):
+		print text
+	else:
+		maxlen=width-buddywidth-1
+		while (True):
+			if (len(text[:maxlen])>0):
+				chantext.append(text[:maxlen])
+			text=text[maxlen:]
+			if text=='':
+				break
+		redraw(stdscr)
+		stdscr.refresh()
+
+
+### Server class
+# Contains the server socket listener/writer
+
+class Server():
+	# Server roster dictionary: nick->timestamp
+	serverRoster={}
+
+	## List of message queues to send to clients
+	servermsgs=[]
+
+	## Eliminate all nicks more than a day old
+	def serverRosterCleanThread(self):
+		while True:
+			time.sleep(10)
+			current=time.time()
+			waittime = random.randint(60*60*10,60*60*36) # 10 hours to 1.5 days
+			for b in self.serverRoster:
+				if current-self.serverRoster[b]>waittime: # Idle for more than the time limit
+					self.serverRoster.pop(b) #eliminate nick
+					waittime = random.randint(10*60*24,100*60*24)
+			
+	## Thread attending a single client
+	def serverThread(self,conn,addr,msg):
+		log("(ServerThread): Received connection")
+		conn.setblocking(0)
+		randomwait=random.randint(1,serverRandomWait)
+		while (True):
+			try:
+				time.sleep(1)
+				ready = select.select([conn], [], [], 1.0)
+				if ready[0]:
+					data=sanitize(conn.recv(256))
+					if len(data)==0: continue
+					message="%s: %s" % (self.nick,data)
+					# Received PING, send PONG
+					if data.startswith("/PING"):
+						message=""
+						msg.append(data)
+						continue
+					# Change nick. Note that we do not add to roster before this operation
+					if data.startswith("/nick "): 
+						newnick=data[6:].strip()
+						log("Nick change: %s->%s" % (self.nick,newnick))
+						self.nick=newnick
+						self.serverRoster[newnick]=time.time() # save/refresh timestamp
+						message="Nick changed to %s" % newnick
+						msg.append(message)
+						continue
+					# Return roster
+					if data.startswith("/roster"):
+						message = "--roster"
+						totalbuddies=len(self.servermsgs)
+						for r in self.serverRoster:
+							message+=" %s" % r
+							totalbuddies-=1
+						message+=" --anonymous:%d" % totalbuddies
+						msg.append(message)
+						continue
+					if data.startswith("/serverhelp"):
+						msg.append("These are the commands I support:")
+						msg.append("     /serverhelp  : Send this help")
+						msg.append("     /roster      : Send the buddy list")
+						msg.append("     /nick <nick> : Changes the nick")
+						continue
+					# refresh timestamp
+					self.serverRoster[self.nick]=time.time() 
+					# Send 'message' to all queues
+					for m in self.servermsgs:
+						m.append(message)
+				# We need to send a message
+				if len(msg)>0:
+					randomwait-=1 # Wait some random time to add noise
+					if randomwait==0:
+						m=msg.pop(0)
+						conn.sendall(m)
+						randomwait=random.randint(1,serverRandomWait)
+				# Random wait before sending noise to the client
+				if random.randint(0,clientRandomNoise)==0: 
+					ping="/PING "
+					for i in range(120):
+						ping+="%02X" % random.randint(ord('a'),ord('z'))
+					msg.append(ping)
+			except:
+				self.servermsgs.remove(msg)
+				conn.close()
+				print "exiting: msgs %d" % len(self.servermsgs)
+				raise
+
+	## Server main thread
+	def serverMain(self):
+		global STDOutLog
+		global TORclientFunctionality
+		STDOutLog=True
+		log("(Main Server Thread) Trying to connect to existing tor...")
+		# Starts tor if not active
+		if detectTOR():
+			loadhostname()
+			TORclientFunctionality=1
+		else:
+			initTor()
+			while(TORclientFunctionality==0):
+				time.sleep(1)
+		# Start server socket
+		s=socks.socksocket(socket.AF_INET,socket.SOCK_STREAM)
+		s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1) 
+		s.bind((hidden_service_interface,hidden_service_port))		
+		log("(Main Server Thread) Tor looks active, listening on %s" % hostname)
+		s.listen(5)
+		# Create server roster cleanup thread
+		t = Thread(target=self.serverRosterCleanThread, args=())
+		t.daemon = True
+		t.start()
+		while True:
+			try:
+				conn,addr = s.accept()
+				cmsg=[]
+				cmsg.append("Welcome to irc-tor, this is Server")
+				self.servermsgs.append(cmsg)
+				self.nick="anon_%d" % random.randint(0,10000)
+				t = Thread(target=self.serverThread, args=(conn,addr,cmsg))
+				t.daemon = True
+				t.start()
+			except KeyboardInterrupt:
+				log("(Main Server Thread): Exiting")
+			        exit(0)
+			except:
+				pass
+
+## Client commands
+commands =[]
+
+def chat_help():
+	pass
+
+# Client Help
+def chat_help(args): 
+	chantext.append("\ttor-irc, %s %s" % (__author__,__date__))
+	chantext.append("\tAvailable commands:")
+	for c in commands:
+		chantext.append("\t\t/%s: %s" % (c[0],c[2]))
+	return ""
+commands.append(("help",chat_help,"Local help"))
+
+
+# Server help
+def chat_server_help(args): 
+	return "/serverhelp"
+commands.append(("serverhelp",chat_server_help,"Request sever commands help"))
+
+# Quit
+def chat_quit(args): 
+	exit(0)
+commands.append(("quit",chat_quit,"Exit the application"))
+
+## --- end client commands
+
+## Client GUI functions
+
+count=0
+cmdline=""
+inspoint=0
+pagepoint=0
+
+def changeSize(stdscr):
+	global width,height
+	size = stdscr.getmaxyx()
+	width=size[1]
+	height=size[0]
+
+def redraw(stdscr):
+	global textpad
+	global roster
+	stdscr.clear()
+	# draw Text
+	line=height-3
+	for i in reversed(range(len(chantext)-pagepoint)):
+		try:
+			stdscr.addstr(line,0,chantext[i],0)
+			if line==0: break
+			else: line-=1
+		except:
+			pass
+	# draw roster
+	for i in range(len(roster)):
+		buddy=roster[i]
+		stdscr.addstr(i,width-buddywidth+1,str(buddy),0)
+	# draw lines
+	stdscr.hline(height-2,0,curses.ACS_HLINE,width)
+	stdscr.vline(0,width-buddywidth,curses.ACS_VLINE,height-2)
+	# prompt
+	prompt="~ "
+	stdscr.addstr(height-1,0,"%s%s" % (prompt,cmdline),0)
+	stdscr.move(height-1,len(prompt)+inspoint)
+
+# Process command line
+# Returns string to send to server
+def processLine(command):
+	if command.startswith("/"):
+		comm=command[1:].split(' ')
+		for t in commands:
+			if comm[0].startswith(t[0]):
+				func=t[1]
+				return func(comm)
+	return command
+
+
+# Listen to TOR STDOut and print to LOG
+# Additionaly look for client functionality working
+def torStdoutThread(torproc):
+	global TORclientFunctionality
+	global hostname
+	while(True):
+		line=torproc.stdout.readline()
+		if line != '':
+			log("(TOR):%s" % line)
+		if line.find("Looks like client functionality is working")>-1:
+			loadhostname()
+			TORclientFunctionality=1
+		time.sleep(0.2)
+
+# Client connection thread
+def clientConnectionThread(stdscr,ServerOnionURL,msgs):
+	global TORclientFunctionality
+	global roster
+	while(TORclientFunctionality==0):
+		time.sleep(1)
+	log("clientConnection: TOR looks alive")		
+	while(True):
+		try: 
+			log("Trying to connect to %s:%d" % (ServerOnionURL,hidden_service_port))
+			## Connects to TOR via Socks
+			s=socks.socksocket(socket.AF_INET,socket.SOCK_STREAM)
+			s.setproxy(socks.PROXY_TYPE_SOCKS5,tor_server,tor_server_socks_port)
+			s.settimeout(100)
+			s.connect((ServerOnionURL,hidden_service_port))
+			s.setblocking(0)
+			log("clientConnection: Connected to %s" % ServerOnionURL)
+			log("clientConnection: Autorequesting roster...")
+			msgs.append("/roster")
+			randomwait=random.randint(1,clientRandomWait)
+		except:
+			log("clientConnection: Can't connect! retrying...")
+			#log(traceback.format_exc())
+			#initTor()
+			while(TORclientFunctionality==0):
+				time.sleep(1)
+			continue
+		try:
+			while(True):
+				time.sleep(1)
+				ready = select.select([s], [], [], 1.0)
+				# received data from server
+				if ready[0]:
+					data=sanitize(s.recv(256))
+					# received pong (ignore)
+					if data.find("/PING ")>-1:
+						continue 
+					# received roster list
+					if data.startswith("--roster"):
+						roster=[]
+						for i in data.split(' '):
+							roster.append(i)
+					# Write received data to channel
+					log(data)
+				# We need to send a message
+				if len(msgs)>0:  
+					randomwait-=1 # Wait some random time to add noise
+					if randomwait==0:
+						m = msgs.pop(0)
+						s.sendall(m)
+						randomwait=random.randint(1,clientRandomWait)
+				# send noise in form of PINGs
+				if random.randint(0,clientRandomNoise)==0:
+					ping="/PING "
+					for i in range(120):
+						ping+="%02X" % random.randint(0,255)
+					#log("Sending %s" % ping)
+					msgs.append(ping)
+		except:
+			s.close()
+			pass
+
+
 ## Client main procedure
 def clientMain(stdscr,ServerOnionURL):
 	global cmdline
@@ -475,18 +525,24 @@ def clientMain(stdscr,ServerOnionURL):
 	
 	global TORclientFunctionality
 	global hostname
-	loadhostname()
-	TORclientFunctionality=1
+	
+	# Starts TOR if not active
+	if detectTOR():
+		loadhostname()
+		TORclientFunctionality=1
+	else:
+		initTor()
+		while(TORclientFunctionality==0):
+			time.sleep(1)
 
 	## Message queue to send to server
 	msgs=[]
 	t = Thread(target=clientConnectionThread, args=(stdscr,ServerOnionURL,msgs))
 	t.daemon = True
 	t.start()
-	
 
 	# Main Loop
-	while 1:
+	while True:
 		input=stdscr.getch()
 		stdscr.addstr(10,10,"Char: %d " % input,0)
 
