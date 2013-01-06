@@ -39,6 +39,7 @@ hidden_service_interface='127.0.0.1'
 hidden_service_port=11009
 tor_server='127.0.0.1'
 tor_server_socks_port=11109
+minimum_message_len=256
 
 ## Time "noise". Increase this value in dire situations
 
@@ -113,11 +114,20 @@ def initTorDirs():
 		a.close()
                 os.system("chmod +x %s" % torshDir)
 	
+# Add padding to a message up to minimum_message_len
+def addpadding(message):
+	if len(message)<minimum_message_len:
+		message+=chr(0)
+		for i in range(minimum_message_len-len(message)):
+			message+=chr(random.randint(ord('a'),ord('z')))
+	return message
+		
 
 ## Return sanitized version of input string
 def sanitize(string):
 	out=""
 	for c in string:
+		if (ord(c)==0): break # char(0) marks start of padding
 		if (ord(c)>=0x20) and (ord(c)<0x80):
 			out+=c
 	return out
@@ -266,7 +276,7 @@ class Server():
 				time.sleep(1)
 				ready = select.select([conn], [], [], 1.0)
 				if ready[0]:
-					data=sanitize(conn.recv(256))
+					data=sanitize(conn.recv(minimum_message_len))
 					if len(data)==0: continue
 					message="%s: %s" % (self.nick,data)
 					# Received PING, send PONG
@@ -309,7 +319,7 @@ class Server():
 				if len(msg)>0:
 					randomwait-=1 # Wait some random time to add noise
 					if randomwait==0:
-						m=msg.pop(0)
+						m = addpadding(msg.pop(0))
 						conn.sendall(m)
 						randomwait=random.randint(1,serverRandomWait)
 				# Random wait before sending noise to the client
@@ -351,11 +361,11 @@ class Server():
 		t.start()
 		while True:
 			try:
+				self.nick="anon_%d" % random.randint(0,10000)
 				conn,addr = s.accept()
 				cmsg=[]
-				cmsg.append("Welcome, this is %s" % self.channelname)
+				cmsg.append("Welcome %s, this is %s" % (self.nick,self.channelname))
 				self.servermsgs.append(cmsg)
-				self.nick="anon_%d" % random.randint(0,10000)
 				t = Thread(target=self.serverThread, args=(conn,addr,cmsg))
 				t.daemon = True
 				t.start()
@@ -457,6 +467,7 @@ def torStdoutThread(torproc):
 			TORclientFunctionality=1
 		time.sleep(0.2)
 
+
 # Client connection thread
 def clientConnectionThread(stdscr,ServerOnionURL,msgs):
 	global TORclientFunctionality
@@ -479,8 +490,7 @@ def clientConnectionThread(stdscr,ServerOnionURL,msgs):
 			randomwait=random.randint(1,clientRandomWait)
 		except:
 			log("clientConnection: Can't connect! retrying...")
-			#log(traceback.format_exc())
-			#initTor()
+			time.sleep(1)
 			while(TORclientFunctionality==0):
 				time.sleep(1)
 			continue
@@ -490,7 +500,7 @@ def clientConnectionThread(stdscr,ServerOnionURL,msgs):
 				ready = select.select([s], [], [], 1.0)
 				# received data from server
 				if ready[0]:
-					data=sanitize(s.recv(256))
+					data=sanitize(s.recv(minimum_message_len))
 					# received pong (ignore)
 					if data.find("/PING ")>-1:
 						continue 
@@ -505,7 +515,7 @@ def clientConnectionThread(stdscr,ServerOnionURL,msgs):
 				if len(msgs)>0:  
 					randomwait-=1 # Wait some random time to add noise
 					if randomwait==0:
-						m = msgs.pop(0)
+						m = addpadding(msgs.pop(0))
 						s.sendall(m)
 						randomwait=random.randint(1,clientRandomWait)
 				# send noise in form of PINGs
@@ -638,4 +648,6 @@ if __name__=='__main__':
   	s=Server()
 	s.serverMain(options.channel_name)
   else:
-   	Client(options.connect)
+  	if len(options.connect)>0:
+	   	Client(options.connect)
+	else: parser.print_help()
