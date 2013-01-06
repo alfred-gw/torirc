@@ -242,6 +242,9 @@ class Server():
 	## List of message queues to send to clients
 	servermsgs=[]
 
+	## channel name
+	channelname=""
+
 	## Eliminate all nicks more than a day old
 	def serverRosterCleanThread(self):
 		while True:
@@ -283,6 +286,7 @@ class Server():
 					# Return roster
 					if data.startswith("/roster"):
 						message = "--roster"
+						message+=" %s" % self.channelname
 						totalbuddies=len(self.servermsgs)
 						for r in self.serverRoster:
 							message+=" %s" % r
@@ -321,10 +325,11 @@ class Server():
 				raise
 
 	## Server main thread
-	def serverMain(self):
+	def serverMain(self,channel_name):
 		global STDOutLog
 		global TORclientFunctionality
 		STDOutLog=True
+		self.channelname=channel_name
 		log("(Main Server Thread) Trying to connect to existing tor...")
 		# Starts tor if not active
 		if detectTOR():
@@ -348,7 +353,7 @@ class Server():
 			try:
 				conn,addr = s.accept()
 				cmsg=[]
-				cmsg.append("Welcome to irc-tor, this is Server")
+				cmsg.append("Welcome, this is %s" % self.channelname)
 				self.servermsgs.append(cmsg)
 				self.nick="anon_%d" % random.randint(0,10000)
 				t = Thread(target=self.serverThread, args=(conn,addr,cmsg))
@@ -492,7 +497,7 @@ def clientConnectionThread(stdscr,ServerOnionURL,msgs):
 					# received roster list
 					if data.startswith("--roster"):
 						roster=[]
-						for i in data.split(' '):
+						for i in data.split(' ')[1:]:
 							roster.append(i)
 					# Write received data to channel
 					log(data)
@@ -623,14 +628,14 @@ def Client(ServerOnionURL):
 if __name__=='__main__':
   parser = OptionParser()
   parser.add_option("-c", "--connect", action="store", type="string", dest="connect", help="Acts as client, connect to server")
-  parser.add_option("-s", "--server", action="store_true", dest="Server", help="Acts as server")
+  parser.add_option("-s", "--server", action="store", type="string",dest="channel_name", help="Acts as server")
   	# no arguments->bail
   if len(sys.argv)==1:
   	parser.print_help()
 	exit(0)
   (options, args) = parser.parse_args()
-  if options.Server:
+  if options.channel_name:
   	s=Server()
-	s.serverMain()
+	s.serverMain(options.channel_name)
   else:
    	Client(options.connect)

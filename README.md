@@ -19,8 +19,7 @@ Example use:
 ------------
 
 In the Server:
-
-	~$ ./torirc.py -s
+	~$ ./torirc.py --server=#TESTSRV
 	(Main Server Thread) Trying to connect to existing tor...
 	(Main Server Thread) Tor looks active, listening on k52whdwcd2zxjtcq.onion
 
