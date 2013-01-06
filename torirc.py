@@ -542,6 +542,7 @@ def clientMain(stdscr,ServerOnionURL):
 	global cmdline
 	global inspoint
 	global pagepoint
+	global width,height
 	changeSize(stdscr)
 	redraw(stdscr)
 	
@@ -566,7 +567,6 @@ def clientMain(stdscr,ServerOnionURL):
 	# Main Loop
 	while True:
 		input=stdscr.getch()
-		stdscr.addstr(10,10,"Char: %d " % input,0)
 
 		# event processing
 		if (input == curses.KEY_RESIZE):
@@ -598,7 +598,6 @@ def clientMain(stdscr,ServerOnionURL):
 		if (input == curses.KEY_UP):
 		if (input == curses.KEY_DOWN):
 		"""
-
 		if (input == 10):
 			tosend=processLine(cmdline)
 			if len(tosend)>0:
@@ -608,8 +607,9 @@ def clientMain(stdscr,ServerOnionURL):
 
 		# Ascii key
 		if input>31 and input<128:
-			cmdline=cmdline[:inspoint]+chr(input)+cmdline[inspoint:]
-			inspoint+=1
+			if len(cmdline)<(width-5):
+				cmdline=cmdline[:inspoint]+chr(input)+cmdline[inspoint:]
+				inspoint+=1
 		redraw(stdscr)
 
 # Client
