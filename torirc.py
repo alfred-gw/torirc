@@ -267,7 +267,7 @@ class Server():
 					waittime = random.randint(10*60*24,100*60*24)
 			
 	## Thread attending a single client
-	def serverThread(self,conn,addr,msg):
+	def serverThread(self,conn,addr,msg,nick):
 		log("(ServerThread): Received connection")
 		conn.setblocking(0)
 		randomwait=random.randint(1,serverRandomWait)
@@ -278,7 +278,7 @@ class Server():
 				if ready[0]:
 					data=sanitize(conn.recv(minimum_message_len))
 					if len(data)==0: continue
-					message="%s: %s" % (self.nick,data)
+					message="%s: %s" % (nick,data)
 					# Received PING, send PONG
 					if data.startswith("/PING"):
 						message=""
@@ -287,8 +287,8 @@ class Server():
 					# Change nick. Note that we do not add to roster before this operation
 					if data.startswith("/nick "): 
 						newnick=data[6:].strip()
-						log("Nick change: %s->%s" % (self.nick,newnick))
-						self.nick=newnick
+						log("Nick change: %s->%s" % (nick,newnick))
+						nick=newnick
 						self.serverRoster[newnick]=time.time() # save/refresh timestamp
 						message="Nick changed to %s" % newnick
 						msg.append(message)
@@ -311,7 +311,7 @@ class Server():
 						msg.append("     /nick <nick> : Changes the nick")
 						continue
 					# refresh timestamp
-					self.serverRoster[self.nick]=time.time() 
+					self.serverRoster[nick]=time.time() 
 					# Send 'message' to all queues
 					for m in self.servermsgs:
 						m.append(message)
@@ -361,12 +361,12 @@ class Server():
 		t.start()
 		while True:
 			try:
-				self.nick="anon_%d" % random.randint(0,10000)
 				conn,addr = s.accept()
 				cmsg=[]
-				cmsg.append("Welcome %s, this is %s" % (self.nick,self.channelname))
+				nick="anon_%d" % random.randint(0,10000)
+				cmsg.append("Welcome %s, this is %s" % (nick,self.channelname))
 				self.servermsgs.append(cmsg)
-				t = Thread(target=self.serverThread, args=(conn,addr,cmsg))
+				t = Thread(target=self.serverThread, args=(conn,addr,cmsg,nick))
 				t.daemon = True
 				t.start()
 			except KeyboardInterrupt:
