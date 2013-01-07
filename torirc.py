@@ -294,6 +294,7 @@ class Server():
 					# Change nick. Note that we do not add to roster before this operation
 					if data.startswith("/nick "): 
 						newnick=data[6:].strip()
+						if newnick.startswith("--"):continue
 						log("Nick change: %s->%s" % (nick,newnick))
 						nick=newnick
 						self.serverRoster[newnick]=time.time() # save/refresh timestamp
