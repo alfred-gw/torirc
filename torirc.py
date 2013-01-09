@@ -33,7 +33,7 @@ except:
 	exit(0)
 
 __author__="alfred"
-__date__ ="$Jan 06, 2013$"
+__date__ ="$Jan 08, 2013$"
 
 ## ---------- Start of user-configurable variables ----------------
 
