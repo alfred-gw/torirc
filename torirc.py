@@ -18,38 +18,30 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA
 #
+__author__="alfred"
+__date__ ="$Jul 30, 2013$"
 
-import curses,traceback
+import curses
 from threading import Thread
 from optparse import OptionParser
 import time,os,subprocess
 import socket,select,random,sys
-
-try:
-	import socks
-except:
-	print "Can't load socksiphy module."
-	print "Try installing python-socksipy in debian-like distros"
-	exit(0)
-
-__author__="alfred"
-__date__ ="$Jan 08, 2013$"
+import tempfile
 
 ## ---------- Start of user-configurable variables ----------------
 
-# Directories
-configdir='Torirc-config'
-hostnamefile='%s/hidden_service/hostname' % configdir
-
-# Network-related variables
-hidden_service_interface='127.0.0.1'
-hidden_service_port=11009
-tor_server='127.0.0.1'
-tor_server_socks_port=11109
 minimum_message_len=256
 
-## Time "noise". Increase this value in dire situations
+# Network-related variables
+tor_server='127.0.0.1'
 
+# Used if can't load it from configuration
+tor_server_control_port=9051
+tor_server_socks_port=9050 
+hidden_service_interface='127.0.0.1'
+hidden_service_port=11009
+
+## Time "noise". Increase this value in dire situations
 clientRandomWait=5 # Random wait before sending messages
 clientRandomNoise=10 # Random wait before sending the "noise message" to the server
 serverRandomWait=5 # Random wait before sending messages 
@@ -63,64 +55,64 @@ buddywidth=20
 chantext=[]
 roster=[]
 
-## Tor glue files
+## Tor stem glue class
 
-#tor.sh
-torsh="""#!/bin/sh
+class torStem():
+	def connect(self,addr='127.0.0.1',cport=9051):
 
-trap 'kill -15 `cat tor.pid`' 15
+		print "[I] Connecting to TOR via Stem"
+		# Load Stem lib
+		try:
+			from stem.control import Controller
+		except:
+			print "[E] Can't load stem module."
+			print "[E] Try installing python-stem in debian-like distros"
+			exit(0)
+		# Connect to TOR
+		self.controller = Controller.from_port(address=addr,port=cport)
+		self.controller.authenticate()  # provide the password here if you set one
+	
+		bytes_read = self.controller.get_info("traffic/read")
+		bytes_written = self.controller.get_info("traffic/written")
+	
+		print "[I] Tor relay is alive. %s bytes read, %s bytes written." % (bytes_read, bytes_written)
+		print "[C] Tor Version: %s" % str(self.controller.get_version())
+		# Get socks port
+		try:
+			self.SocksPort=self.controller.get_conf("SocksPort")
+			if self.SocksPort==None:
+				self.SocksPort=9050
+			else:	self.SocksPort=int(self.SocksPort)
+			print "[C] Socks port is: %d" % self.SocksPort
+		except: 
+			print "[E] Failed to get Socks port, trying 127.0.0.1:9050..."
+			self.SocksPort=9050
+			pass
 
-export PATH=$PATH:/usr/sbin
-tor -f torrc.txt --PidFile tor.pid &
-wait
-"""
+		# Add hidden service
+		print "[I] Adding hidden service..."
+		newHiddenServiceDir=tempfile.mkdtemp()
+		self.origConfmap = self.controller.get_conf_map("HiddenServiceOptions")
+		self.controller.set_options([
+		  	('HiddenServiceDir',self.origConfmap["HiddenServiceDir"]),
+			('HiddenServicePort',self.origConfmap["HiddenServicePort"]),
+		  	('HiddenServiceDir',newHiddenServiceDir),
+			('HiddenServicePort',"%d %s:%d" % (hidden_service_port,hidden_service_interface,hidden_service_port))
+			])
+		self.hostname=open("%s/hostname" % newHiddenServiceDir,"rb").read().strip()
+		print "[C] Hostname is %s" % self.hostname
+	def disconnect(self):
+	  # Remove hidden service
+	  print "Removing hidden service..."
+	  self.controller.set_options([
+	  	('HiddenServiceDir',self.origConfmap["HiddenServiceDir"]),
+		('HiddenServicePort',self.origConfmap["HiddenServicePort"])
+		])
 
-#torrc.txt
-torrc="""## Socks port
-SocksPort %d
-
-## INCOMING connections for the hidden service arrive at 11009 
-HiddenServiceDir hidden_service
-HiddenServicePort %d %s:%d
-
-## where should tor store it's cache files
-DataDirectory tor_data
-
-## some tuning
-AvoidDiskWrites 1
-LongLivedPorts %d
-FetchDirInfoEarly 1
-CircuitBuildTimeout 30
-NumEntryGuards 6
-""" % (tor_server_socks_port,hidden_service_port,hidden_service_interface,hidden_service_port,hidden_service_port)
 
 ## Log Mode (Server logs to stdout, client do not)
 STDoutLog=False
 
-## Variable signalling TOR client functionality available
-TORclientFunctionality=0
-
-# Initialize TOR config directory
-def initTorDirs():
-    	log ("(1) initializing directories")
-	#Create dir
-	TorDir=os.path.join(os.getcwd(),configdir)
-	if not os.path.isdir(TorDir):
-		os.mkdir(TorDir)
-	#Create torrc.txt
-	torrcDir=os.path.join(TorDir,"torrc.txt")
-	if not os.path.exists(torrcDir):
-		a=open(torrcDir,"wb")
-		a.write(torrc)
-		a.close()
-	torshDir=os.path.join(TorDir,"tor.sh")
-	if not os.path.exists(torshDir):
-		#Create tor.sh
-		a=open(torshDir,"wb")
-		a.write(torsh)
-		a.close()
-                os.system("chmod +x %s" % torshDir)
-	
 # Add padding to a message up to minimum_message_len
 def addpadding(message):
 	if len(message)<minimum_message_len:
@@ -138,99 +130,6 @@ def sanitize(string):
 		if (ord(c)>=0x20) and (ord(c)<0x80):
 			out+=c
 	return out
-
-
-## Load hidden hostname from Tor config directory
-def loadhostname():
-	global hostname
-	a=open(hostnamefile,"rb")
-	hostname=a.read().strip()
-	a.close()
-	return hostname
-
-
-## detects TOR by binding to the socks port
-def detectTOR():
-	try:
-		s=socks.socksocket(socket.AF_INET,socket.SOCK_STREAM)
-		s.settimeout(1)
-		s.connect((tor_server,tor_server_socks_port))
-		s.close()
-		return True
-	except:	return False
-
-## Starts portable TOR process, torchat-style
-def initTor():
-    global tor_in, tor_out
-    global TOR_CONFIG
-    global tor_pid
-    global tor_proc
-    log ("(1) entering function initTor()")
-    initTorDirs()
-    old_dir = os.getcwd()
-    log("(1) current working directory is %s" % os.getcwd())
-    try:
-        log("(1) changing working directory")
-        os.chdir(configdir)
-        log("(1) current working directory is %s" % os.getcwd())
-
-        # now start tor with the supplied config file
-        log("(1) trying to start Tor")
-
-        if os.path.exists("tor.sh"):
-                #let our shell script start a tor instance
-                tor_proc = subprocess.Popen("./tor.sh".split(),stdout=subprocess.PIPE)
-                tor_pid = tor_proc.pid
-                log("(1) tor pid is %i" % tor_pid)
-        else:
-                log("(1) there is no Tor starter script (tor.sh)")
-                tor_pid = False
-
-        if tor_pid:
-            log("(1) successfully started Tor (pid=%i)" % tor_pid)
-
-            # we now assume the existence of our hostname file
-            # it WILL be created after the first start
-            # if not, something must be totally wrong.
-            cnt = 0
-            found = False
-            while cnt <= 20:
-                try:
-                    log("(1) trying to read hostname file (try %i of 20)" % (cnt + 1))
-                    f = open(os.path.join("hidden_service", "hostname"), "r")
-                    hostname = f.read().strip()
-                    log("(1) found hostname: %s" % hostname)
-                    found = True
-                    f.close()
-                    break
-                except:
-                    # we wait 20 seconds for the file to appear
-                    time.sleep(1)
-                    cnt += 1
-
-            if not found:
-                log("(0) very strange: portable tor started but hostname could not be read")
-                log("(0) will use section [tor] and not [tor_portable]")
-            else:
-                #in portable mode we run Tor on some non-standard ports:
-                #so we switch to the other set of config-options
-                log("(1) switching active config section from [tor] to [tor_portable]")
-                TOR_CONFIG = "tor_portable"
-                #start the timer that will log Tor Stdout to console
-		t = Thread(target=torStdoutThread, args=(tor_proc,))
-		t.daemon = True
-		t.start()
-
-        else:
-            log("(1) no own Tor instance. Settings in [tor] will be used")
-
-    except:
-        log("(1) an error occured while starting tor, see traceback:")
-        log(traceback.format_exc())           # Print the exception
-
-    log("(1) changing working directory back to %s" % old_dir)
-    os.chdir(old_dir)
-    log("(1) current working directory is %s" % os.getcwd())
 
 ## Log function
 ## Logs to STDOut or to the chantext channel list
@@ -345,23 +244,24 @@ class Server():
 	## Server main thread
 	def serverMain(self,channel_name):
 		global STDOutLog
-		global TORclientFunctionality
 		STDOutLog=True
 		self.channelname=channel_name
-		log("(Main Server Thread) Trying to connect to existing tor...")
-		# Starts tor if not active
-		if detectTOR():
-			loadhostname()
-			TORclientFunctionality=1
-		else:
-			initTor()
-			while(TORclientFunctionality==0):
-				time.sleep(1)
+		# Connects to TOR and create hidden service
+		self.ts=torStem()
+		try:
+			self.ts.connect(tor_server,tor_server_control_port)
+		except Exception as e:
+			log("[E] %s" % e)
+			log("[E] Check if the control port is activated in /etc/tor/torrc")
+			log("[E] Try to run with the same user than tor, I.E. 'sudo -u debian-tor ./torirc.py -s saranga'")
+			exit(0)
+
 		# Start server socket
-		s=socks.socksocket(socket.AF_INET,socket.SOCK_STREAM)
+		s=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
 		s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1) 
 		s.bind((hidden_service_interface,hidden_service_port))		
-		log("(Main Server Thread) Tor looks active, listening on %s" % hostname)
+		log('[I] Server Active')
+		log('[I] Connect with the command "%s --connect=%s"' % (sys.argv[0],self.ts.hostname))
 		s.listen(5)
 		# Create server roster cleanup thread
 		t = Thread(target=self.serverRosterCleanThread, args=())
@@ -378,7 +278,8 @@ class Server():
 				t.daemon = True
 				t.start()
 			except KeyboardInterrupt:
-				log("(Main Server Thread): Exiting")
+				self.ts.disconnect()
+				log("[I] (Main Server Thread): Exiting")
 			        exit(0)
 			except:
 				pass
@@ -461,28 +362,16 @@ def processLine(command):
 	return command
 
 
-# Listen to TOR STDOut and print to LOG
-# Additionaly look for client functionality working
-def torStdoutThread(torproc):
-	global TORclientFunctionality
-	global hostname
-	while(True):
-		line=torproc.stdout.readline()
-		if line != '':
-			log("(TOR):%s" % line)
-		if line.find("Looks like client functionality is working")>-1:
-			loadhostname()
-			TORclientFunctionality=1
-		time.sleep(0.2)
-
-
 # Client connection thread
 def clientConnectionThread(stdscr,ServerOnionURL,msgs):
-	global TORclientFunctionality
 	global roster
-	while(TORclientFunctionality==0):
-		time.sleep(1)
-	log("clientConnection: TOR looks alive")		
+	# Try to load Socksipy
+	try:
+		import socks
+	except:
+		print "[E] Can't load socksiphy module."
+		print "[E] Try installing python-socksipy in debian-like distros"
+		exit(0)
 	while(True):
 		try: 
 			log("Trying to connect to %s:%d" % (ServerOnionURL,hidden_service_port))
@@ -499,8 +388,6 @@ def clientConnectionThread(stdscr,ServerOnionURL,msgs):
 		except:
 			log("clientConnection: Can't connect! retrying...")
 			time.sleep(1)
-			while(TORclientFunctionality==0):
-				time.sleep(1)
 			continue
 		try:
 			while(True):
@@ -547,18 +434,6 @@ def clientMain(stdscr,ServerOnionURL):
 	changeSize(stdscr)
 	redraw(stdscr)
 	
-	global TORclientFunctionality
-	global hostname
-	
-	# Starts TOR if not active
-	if detectTOR():
-		loadhostname()
-		TORclientFunctionality=1
-	else:
-		initTor()
-		while(TORclientFunctionality==0):
-			time.sleep(1)
-
 	## Message queue to send to server
 	msgs=[]
 	t = Thread(target=clientConnectionThread, args=(stdscr,ServerOnionURL,msgs))
@@ -594,7 +469,7 @@ def clientMain(stdscr,ServerOnionURL):
 		if (input == curses.KEY_NPAGE):
 			pagepoint-=height-2
 			if pagepoint<0: pagepoint=0
-		#History
+		#History: TODO
 		"""
 		if (input == curses.KEY_UP):
 		if (input == curses.KEY_DOWN):
@@ -619,19 +494,21 @@ def Client(ServerOnionURL):
   global stdscr
   global STDOutLog 
   STDOutLog=False
+
   try:
       # Initialize curses
       stdscr=curses.initscr()
       curses.noecho()
       curses.cbreak()
-      #curses.start_color()
       stdscr.keypad(1)
-      clientMain(stdscr,ServerOnionURL)                    # Enter the main loop
+      # Enter the main loop
+      clientMain(stdscr,ServerOnionURL)
       # Set everything back to normal
       stdscr.keypad(0)
       curses.echo()
       curses.nocbreak()
-      curses.endwin()                 # Terminate curses
+      # Terminate curses
+      curses.endwin() 
       exit(0)
   except:
       # In event of error, restore terminal to sane state.
